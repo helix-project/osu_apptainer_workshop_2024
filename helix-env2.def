@@ -1,0 +1,10 @@
+Bootstrap: localimage
+From: ./helix-env.sif
+Stage: build
+
+%runscript
+    #!/bin/bash
+    cd /cern
+    source /cern/helix_env.sh
+    cd -
+    exec $*
