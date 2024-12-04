@@ -1,0 +1,13 @@
+Bootstrap: docker
+From: ubuntu
+Stage: build
+
+%files
+    convert_units.cpp /build/convert_units.cpp
+    
+%post
+    apt-get update && apt-get upgrade -y && apt-get install -y g++
+    g++ /build/convert_units.cpp -o /bin/convert_units
+
+%runscript
+    /bin/convert_units $*
