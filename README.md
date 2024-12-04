@@ -21,6 +21,13 @@ For Windows, the easiest way to do this is through WSL. Instructions can be foun
 
 For Mac, the recommended way is to install via `lima` which can be installed using Homebrew. Instructions can be found [here](https://apptainer.org/docs/admin/main/installation.html#mac).
 
+### Conda?
+
+It looks like this can be installed via conda (Linux only). I haven't tested this... Someone should at the workshop:
+```bash
+mamba install -c conda-forge apptainer
+```
+
 ## Apptainer Shell
 
 Let's jump right in and try to run an image using Apptainer. We're lazy, so we're going to rely on other's work.
@@ -151,7 +158,58 @@ Because the various sourcing is done within the Dockerfile, this isn't passed to
 apptainer run helix.sif cat /cern/helix_env.sh
 ```
 Which shows the following:
-> 
+```
+# A stub you can source to get your cern stuff defined
+# You may need to do it in your env file
+source /cern/root/bin/thisroot.sh
+if [ -e /cern/g4 ]; then
+  export G4INSTALL=/cern/g4
+  export LWD=$PWD
+  cd /cern/g4/bin
+  source geant4.sh
+  cd $LWD
+fi
+```
+So we need to run `source /cern/helix_env.sh` in order to "source" the environment. Perhaps we can do this using the `%environment`?
+```bash
+Bootstrap: localimage
+From: ./helix.sif
+Stage: build
+
+%environment
+    source /cern/helix_env.sh
+```
+Adding to the `%environment` produces the following error:
+```
+source: /cern/root/bin/thisroot.sh:209:13: parameter expansion requires a literal
+```
+We can potentially solve this by appending the `.bashrc` file with the contents... but remember, the container user is us and we're using the same `.bashrc` file. We don't want to modify the host system!
+
+So this didn't work, let's try to use a `%runscript` instead:
+```bash
+Bootstrap: localimage
+From: ./helix.sif
+Stage: build
+
+%runscript
+    #!/bin/bash
+    source /cern/helix_env.sh
+    exec $*
+```
+
+Here the runscript first runs `source /cern/helix_env.sh` before running `exec $*`. The second command will simply execute any arguments that where passed to the script.
+
+We can test this now with:
+```bash
+apptainer run helix2.sif root-config --version
+```
+
+Note here: `root-config --version` is passed as arguments to the `%runscript`. These arguments are captured in `$*` and passed to `exec`. The `%runscript` is effectively now:
+```bash
+#!/bin/bash
+source /cern/helix_env.sh
+root-config --version
+```
 
 ### Activating Python environment
 
