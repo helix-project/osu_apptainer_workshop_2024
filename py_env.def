@@ -1,0 +1,18 @@
+Bootstrap: docker
+From: condaforge/mambaforge
+
+%environment
+    # set up environment for when using the container
+    . /opt/conda/etc/profile.d/conda.sh
+    conda activate
+    conda activate test_env
+
+%post
+    mamba create --name test_env python=3.8
+    # mamba init
+    # conda activate test_env
+
+
+# %runscript
+#     #!/bin/bash
+#     conda activate test_env

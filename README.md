@@ -93,11 +93,93 @@ This will likely give a file permission error as apptainer tries to access a fol
 
 
 
-# Where Docker doesn't translate into Apptainer
+# What to do when Apptainer **cannot** run a Docker image?
 
-## Unsure what's going on? -> Brain Surgery!
+There are some fringe cases when Apptainer cannot successfully run a Docker image as intended. 
+When this happens there are a few steps we can take.
+
+## Unsure what's going on? -> Brain Surgery! (Create a sandbox)
+
+We can create a sandbox, or a writable image using:
+```bash
+apptainer build --sandbox sandbox_directory image_name
+```
+This will create a sandbox version of the `image_name` image in the `sandbox_directory`. For example:
+```bash
+apptainer build --sandbox python_project docker://python
+```
+This will create a directory called `python_project`. 
+Within this directory we see what is the typical contents of `/`:
+```bash
+> ls python_project 
+bin  boot  dev  environment  etc  home  lib  lib64  media  mnt  opt  proc  root  run  sbin  singularity  srv  sys  tmp  usr  var
+```
+This is essentially the filesystem snapshot that we load in when we create a container.
+
+We can then start the container as writable using:
+```bash
+apptainer shell --writable python_project
+```
+This starts a new container based on the `python_project` directory. We can make changes to this container, for example installing `ipython`:
+```bash
+pip install ipython
+```
+Once we exit the container, the changes are saved to the `python_project` directory. 
+We can then create a compressed image using:
+```bash
+apptainer build python_project.sif python_project 
+```
 
 ## Environmental Variables and Setup
+
+One of the differences between Docker and Apptainer, is that when you run a Docker container you essentially start from the last step defined in the Dockerfile. This means that steps that going into the Dockerfile, for example sourcing an environmental file, remains active in the container.
+
+This isn't the case in Apptainer. Apptainer essentailly starts a new shell/instance. Apptainer uses a `%environment` section to define environmental variables and a `%runscript` to define what happens when we enter a container to run a command, or `%startscript` to define what happens when starting an instance.
+
+Some common examples of this are:
+* Sourcing environmental variables
+* Activating python environments
+
+Let's look at examples of how to solve these.
+
+### Sourcing environmental variables
+
+A lot of software that is built ontop of ROOT and Geant4 require various scripts to be sourced prior to running the code. 
+For example the Helix-env image.
+Because the various sourcing is done within the Dockerfile, this isn't passed to Apptainer. Let's start off by looking in the container:
+```bash
+apptainer run helix.sif cat /cern/helix_env.sh
+```
+Which shows the following:
+> 
+
+### Activating Python environment
+
+Let's define the `%environment` of a container using conda to run a sub environment:
+```
+Bootstrap: docker
+From: condaforge/mambaforge
+
+%environment
+    # set up environment for when using the container
+    . /opt/conda/etc/profile.d/conda.sh
+    conda activate
+    conda activate test_env
+
+%post
+    mamba create --name test_env python=3.8
+    # mamba init
+    # conda activate test_env
+
+
+# %runscript
+#     #!/bin/bash
+#     conda activate test_env
+```
+
+In general, you shouldn't need to create a new python environment. Instead one could install all the packages they need within the base environment within the image.
+
+
 
 ## Cache and User install locations
 
