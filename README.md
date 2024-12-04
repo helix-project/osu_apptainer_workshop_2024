@@ -646,7 +646,3 @@ From: condaforge/mambaforge
 
 In general, you shouldn't need to create a new python environment. Instead one could install all the packages they need within the base environment within the image.
 
-
-
-## Cache and User install locations
-
