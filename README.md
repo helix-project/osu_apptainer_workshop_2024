@@ -97,7 +97,416 @@ apptainer run --no-mount root.sif pwd
 ```
 This will likely give a file permission error as apptainer tries to access a folder that it no longer has access too.
 
+## Binding Volumes
 
+We can also bind volumes to custom locations within the container. This is useful when working with pipelines.
+
+```bash
+apptainer run --bind $(pwd):/data_dir root.sif ls /data_dir
+```
+
+We can explicitly bind the mount as read only by adding `:ro` to the bind command:
+```bash
+> apptainer run --bind $(pwd):/data_dir:ro root.sif touch /data_dir/test.txt
+/usr/bin/touch: cannot touch '/data_dir/test.txt': Read-only file system
+```
+
+## Creating an image from a definition file
+
+Similar to Docker, we can create an image from a file with a list of instructions.
+
+Apptainer `def` files follow this format:
+```
+Bootstrap: docker
+From: ubuntu:{{ VERSION }}
+Stage: build
+
+%arguments
+    VERSION=22.04
+
+%setup
+
+%files
+
+%environment
+
+    
+%post
+
+
+%runscript
+
+%startscript
+    
+%test
+
+%labels
+
+%help
+
+```
+
+We'll walk through these sections one by one.
+
+### Preamble
+
+```
+Bootstrap: docker
+From: ubuntu
+Stage: build
+```
+
+* `Bootstrap` specifies where we are getting the base image from. In this case, it's `docker` (DockerHub).
+* `From:` specifies the base image. In this case, it will grab the latest Ubuntu image.
+* `Stage:` specifies the stage of the build. Multiple stages can be used to simplify the build process and reduce the final file size.
+
+
+### `%arguments`
+
+```
+Bootstrap: docker
+From: ubuntu:{{ VERSION }}
+Stage: build
+
+%arguments
+    VERSION=22.04
+```
+
+Arguments are variables that can be used within the definition file. Using arguments allows us to change variables only in one place rather than multiple instances, preventing bugs.
+
+In the above example, we've specified an argument `VERSION=22.04`. This argument is then accessed in the preamble when selecting the Ubuntu image version:
+
+
+```
+From: ubuntu:{{ VERSION }}
+```
+This specifies that we will be using `ubuntu:22.04`.
+
+### `%setup`
+
+Setup commands are first executed outside of the container on the host system before starting to build the image.
+
+For example, suppose we want to compress some files that will later be added to the container:
+
+```
+%setup
+
+    tar -zcvf files.tar.gz ./*.txt
+```
+
+This command would compress all the files ending in `.txt` in the current directory into `files.tar.gz` (also in the current directory).
+
+
+### `%files`
+
+This is where we can specify files to be copied into the container.
+```
+%files
+    files.tar.gz /opt
+```
+Here, we are copying the `files.tar.gz` that was created in the `%setup` into the `/opt` directory of the image (`/opt/files.tar.gz`).
+
+### `%environment`
+
+Here we specify environmental variables that we want set within the container.
+
+```
+%enviroment
+    export PATH=$PATH:/app/bin
+    export DEFAULT_PORT=8001
+```
+
+In this example, we set two environmental variables. First, we modify the `PATH` to include `/app/bin`, where the hypothetical binaries for our application reside. Second, we specify the `DEFAULT_PORT` to be `8001`.
+
+We can access these variables anytime within the container or the build process.
+
+### `%post`
+
+In this section, we specify the command we want to run after the base image has downloaded. Environmental variables for the host system are not passed, so this can be considered a clean environment.
+
+This will likely be the most detailed section of your definition script. For example:
+
+```
+%post
+    apt-get update && apt-get install -y gcc
+    pip install ipython
+```
+
+In the above example, we are simply updating the Ubuntu base image and installing `gcc`. We then install `ipython` using `pip`.
+
+This is a simple example, but `%post` would be the section where dependencies would be installed and/or compiled.
+
+
+### `%runscript`
+
+This is where we define a set of commands that will be executed when running `apptainer run image.sif` or when running the image itself as a command (e.g., `./image.sif`).
+
+Internally, these commands will form a simple script that will be executed.
+
+```
+%runscript
+    ipython
+```
+
+This example will start an IPython interpreter. We could have something more complicated, such as:
+
+```
+%runscript
+    echo "Recieved the following arguements $*"
+    ipython $*
+```
+
+This will output the arguments passed before executing them with IPython. For example:
+
+```
+> apptainer run ./jupyter.sif --version
+Recieved the following arguements --version
+8.22.2
+```
+Here, we're passing `--version` as an argument. This gets passed and run as `ipython --version`, which gives `8.22.2`.
+
+One could use the `%runscript` section to define a default behavior and how arguments are handled.
+
+
+
+### `%startscript`
+
+This is similar to the `%runscript` section where we create a script to be run when running the container. Specifically, the `%startscript` runs when the container is launched as an `instance` rather than a process launched with `run` or `exec`. Instances can be considered more of a daemon, which will have a more passive interface. For example, an instance may monitor a port to receive a command that controls its behavior. It might be better to launch a web server as an instance.
+
+Likewise, if you have multiple steps in a data pipeline, they could be passed between instances which are persistent compared to the analysis target.
+
+
+
+
+### `%test`
+
+This defines a test script that is run at the end of the build process and can be used to ensure the validity of the built container.
+
+For example, if we are building a data pipeline, we might want to make sure we get the expected answer.
+
+
+```
+%test
+    python test_script.py
+    if [ $? -eq 0 ]; then
+        echo "Script executed successfully"
+    else
+        echo "Script failed"
+        exit 1
+    fi
+```
+Here we are running `test_script.py`. The output of this code will be accessible using `$?`, which returns the last return code.
+
+```
+    if [ $? -eq 0 ]; then
+```
+This line checks if the return code is 0, which is a typical code for a successful execution. In our Python code, we would have a line like:
+
+```
+if successful_test:
+    exit(0)
+else:
+    exit(1)
+```
+If the code executes successfully, then the return will be 0; otherwise, it will be 1.
+
+
+### `%labels`
+```
+%labels
+    Author myuser@example.com
+    Version v0.0.1
+    MyLabel Hello World
+```
+
+Here we define a set of labels that are viewable using the `apptainer inspect` command.
+
+Versioning can be super important when developing an application. Maintaining an up-to-date version number can prevent a lot of headaches when trying to debug issues.
+
+
+### `%help`
+
+Help specifies a help message that will be outputted:
+
+```
+%help
+    This is a container with jupyter lab and notebook install
+```
+
+This can be accessed using:
+```
+apptainer run-help my_container.sif
+```
+
+
+## Example definition script
+Here is an example of a `.def` file which installs `Jupyter`, `IPython`, `Matplotlib`, and `NumPy`.
+```
+Bootstrap: docker
+From: python:latest
+
+%post
+    pip install jupyter ipykernel jupyterlab notebook
+    pip install matplotlib numpy
+
+%environment
+    export DEFAULT_PORT=8001
+
+%runscript
+    ipython $*
+
+%startscript
+    jupyter lab --port=$DEFAULT_PORT
+```
+
+This can be built with:
+```
+> apptainer build jupyter.sif jupyter.def
+```
+
+The `runscript` will take arguments and pass them to IPython. For example:
+```
+> ./jupyter.sif hello.py
+Hello, world!
+Inside of container!
+```
+
+The `startscript` will start a Jupyter Lab on port 8001. This can be launched using:
+```
+> apptainer instance start jupyter.sif jupyter-server 
+```
+
+When navigating to `http://localhost:8001`, we'll notice that we need to log in. We can get a login code using:"
+```
+> apptainer exec instance://jupyter-server jupyter lab list
+Currently running servers:
+http://localhost:8001/?token=643b97dc15207ca577782ea2e03a3ec1f9337a4445bc1db8 :: /home/obriens/Documents/apptainer
+```
+
+Clicking on that link will log us in. We need to remember to `stop` the instance once we're finished.
+
+```
+> apptainer instance stop jupyter-server            
+```
+
+## Example of a multi-stage build
+
+As mentioned earlier, using multi-stage builds can help decrease the final size of the `sif` file.
+
+Consider the following `C++` code:
+
+```c++ title="convert_units.cpp"
+#include <iostream>
+#include <fstream>
+
+using namespace std;
+
+int main(int argc, char *argv[]){
+
+    // parse the command passed
+    // Input is in meters
+    float input = atof(argv[1]);
+
+    // convert unit to mm
+    float output = input * 1e3;
+
+    // output to a text file
+    ofstream out_file;
+    out_file.open("test.txt");
+    out_file << output << endl;
+
+    // Also print
+    cout << output << endl;
+    return 0;
+}
+```
+
+This will convert meters to mm. We can imagine this being part of a larger data analysis pipeline.
+
+This can be compiled using:
+```
+g++ convert_units.cpp -o convert_units
+```
+This will create a binary called `convert_units`.
+
+Let's start to build the definition file:
+
+```title="single_stage.def" linenums="1"
+Bootstrap: docker
+From: ubuntu
+Stage: build
+
+%files
+    convert_units.cpp /build/convert_units.cpp
+    
+%post
+    apt-get update && apt-get upgrade -y && apt-get install -y g++
+    g++ /build/convert_units.cpp -o /bin/convert_units
+
+%runscript
+    /bin/convert_units $*
+```
+
+Here we have a single stage called `build`. In this stage, we copy the source code to the `/build` directory at the `%files` stage. In the `%post` stage, we update the OS and install `g++`, a C++ compiler. We then compile the code to `/bin/convert_units`. We then specify this as the entry point of the `%runscript` stage.
+
+We can run this as:
+```
+> ./single_stage.sif 1.25
+1250
+```
+
+You'll notice that the `convert_units.cpp` file is no longer needed once `convert_units` is compiled. Likewise, we only need `g++` to compile `convert_units`; we don't use it later in the file. We could turn this into a multi-stage build:
+
+```linenums="1" title="multi_stage.def" hl_lines="17"
+Bootstrap: docker
+From: ubuntu
+Stage: build
+
+
+%files
+    convert_units.cpp /build/convert_units.cpp
+    
+%post
+    apt-get update && apt-get upgrade -y && apt-get install -y g++
+    g++ /build/convert_units.cpp -o /build/convert_units
+
+Bootstrap: docker
+From: ubuntu
+Stage: final
+
+%files from build
+  /build/convert_units /bin/convert_units
+
+%post
+    apt-get update && apt-get upgrade -y
+
+%runscript
+    /bin/convert_units $*
+```
+
+The definition file is similar to the `single_stage.def` file; however, we have broken this up into two stages. 
+
+The first stage, tagged as `build`, will add the source file `convert_units.cpp` to the image, update the OS, install `g++`, and compile `/build/convert_units`.
+
+The second stage, called `final`, uses the same `Bootstrap` and base image (`ubuntu`) as the `build` stage. However, at the `%files` stage on line 17, we are only copying the `/build/convert_units` from the `build` stage to `/bin/convert_units` in the `final` stage. We still want to make sure we have an up-to-date OS (security updates are always important), so we still run `apt-get update && apt-get upgrade -y`. Finally, the `%runscript` stage is only included in the `final` stage.
+
+We can see that we get the same behavior from both images:
+
+```
+> ./single_stage.sif 1.25 ;  ./multi_stage.sif 1.25
+1250
+1250
+```
+
+However, when we look at the size of the files, we see a difference:
+```
+> ls -lah ./*_stage.sif
+-rwxr-xr-x 1 obriens obriens  63M Mar 25 14:36 ./multi_stage.sif
+-rwxr-xr-x 1 obriens obriens 142M Mar 25 14:36 ./single_stage.sif
+```
+
+
+You'll notice that the `multi_stage.sif` build is around half the size of `single_stage.sif`. This is partly due to the `multi_stage.sif` not containing the source code (`convert_units.cpp`), but also due to it not containing `g++`.
 
 
 # What to do when Apptainer **cannot** run a Docker image?
